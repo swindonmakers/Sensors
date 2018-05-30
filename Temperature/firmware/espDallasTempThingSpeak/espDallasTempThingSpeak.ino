@@ -16,7 +16,6 @@
 
 #include <ESP8266WiFi.h>
 #include <ESP8266WebServer.h>
-#include <WiFiManager.h>          //https://github.com/tzapu/WiFiManager
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #include <Ticker.h>
@@ -36,9 +35,7 @@ extern struct rst_info resetInfo;
 #define READING_INTERVAL 10 * 60 // seconds
 
 static ESP8266WebServer server(80);
-static WiFiManager wifiManager;
 static WiFiClient client;
-static Ticker ledTicker;
 
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature sensors(&oneWire);
@@ -65,18 +62,6 @@ void ledOff()
     digitalWrite(PIN_LED, HIGH);
 }
 
-void tick()
-{
-  if (!DEBUG) {
-    digitalWrite(PIN_LED, !digitalRead(PIN_LED));
-  }
-}
-
-void configModeCallback (WiFiManager *myWiFiManager) {
-  //entered config mode, make led toggle
-  ledTicker.attach(0.2, tick);
-}
-
 void handleRoot() 
 {
   String page = "Temp:";
@@ -85,13 +70,6 @@ void handleRoot()
   page += millis();
   
   server.send(200, "text/plain", page);
-}
-
-void handleResetWiFi()
-{
-  server.send(200, "text/plain", "wifi reset, restarting...");
-  wifiManager.resetSettings();
-  ESP.restart();
 }
 
 void sleep()
@@ -115,26 +93,10 @@ void setup()
     ledOn();
   }
 
-  if (DEBUG) 
-    wifiManager.setDebugOutput(true);
-  else 
-    wifiManager.setDebugOutput(false);
-
-  wifiManager.setConfigPortalTimeout(120); // 60 seconds
-  wifiManager.setAPCallback(configModeCallback);
-
-  if (!wifiManager.autoConnect("TempSensor", "temptemp")) {
-    //reset and try again, or maybe put it to deep sleep
-    debugWrite("Wifi init failed, resetting...");
-    ESP.reset();
-    delay(1000);
-  }
-
-  debugWrite("Connected to wifi");
-  ledTicker.detach();
+  debugWrite("Connecting wifi..");
+  WiFi.begin("myap", "password");
   
   server.on("/", handleRoot);
-  server.on("/resetwifi", handleResetWiFi);
   
   server.begin();
   sensors.begin();

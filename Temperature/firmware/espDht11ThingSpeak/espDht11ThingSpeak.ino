@@ -17,7 +17,7 @@
 #define PIN_LED D6
 
 #define DHTPIN D5
-#define DHTTYPE DHT11   // DHT 22  (AM2302), AM2321
+#define DHTTYPE DHT22   // DHT 22  (AM2302), AM2321
 
 #define READING_INTERVAL 10*60 // seconds
 

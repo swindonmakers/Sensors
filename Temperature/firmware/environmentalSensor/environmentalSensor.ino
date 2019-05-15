@@ -27,6 +27,7 @@
 #include <WiFi.h>
 #include <WebServer.h>
 #include <PingKeepAlive.h>
+#include <RhaNtp.h>
 
 #include <Wire.h>
 #include <SPI.h>
@@ -59,6 +60,9 @@ Adafruit_BME280 bme;
 static WebServer server(80);
 static WiFiClient client;
 PingKeepAlive pka;
+RhaNtp ntp;
+
+time_t bootTime = 0; // boot time
 
 float temp;
 uint16_t co2;
@@ -71,6 +75,12 @@ float bmeHumidity;
 float voMeasured;
 float calcVoltage;
 float dustDensity;
+
+time_t requestTime()
+{
+  ntp.updateTime();
+  return 0;
+}
 
 void handleRoot() 
 {
@@ -138,6 +148,12 @@ void setup() {
   pka.onDisconnect(wifiDisconnect);
   pka.onReconnect(wifiReconnect);
 
+  IPAddress timeServerIP;
+  WiFi.hostByName(TIMESERVER, timeServerIP);
+  ntp.init(timeServerIP, TIMEZONE);
+  setSyncProvider(requestTime);
+  setSyncInterval(60 * 60); // every hour
+
   server.on("/", handleRoot);
   server.begin();
 
@@ -147,6 +163,9 @@ void setup() {
 void loop() {
   server.handleClient();
   pka.loop();
+  ntp.loop();
+  if (bootTime == 0 && timeStatus() == timeSet)
+    bootTime = ntp.localNow();
 
   if (millis() - lastSensorRead > SENSOR_READ_FREQUENCY_MS) {
     lastSensorRead = millis();

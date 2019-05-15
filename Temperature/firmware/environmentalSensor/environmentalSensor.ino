@@ -26,6 +26,8 @@
 
 #include <WiFi.h>
 #include <WebServer.h>
+#include <PingKeepAlive.h>
+
 #include <Wire.h>
 #include <SPI.h>
 #include <Adafruit_Sensor.h>
@@ -56,6 +58,7 @@ Adafruit_BME280 bme;
 
 static WebServer server(80);
 static WiFiClient client;
+PingKeepAlive pka;
 
 float temp;
 uint16_t co2;
@@ -96,6 +99,16 @@ bool sendData()
   return false;
 }
 
+void wifiDisconnect()
+{
+  
+}
+
+void wifiReconnect()
+{
+  
+}
+
 void setup() {
   Serial.begin(115200);
   
@@ -119,7 +132,11 @@ void setup() {
   float temp = ccs.calculateTemperature();
   ccs.setTempOffset(temp - 25.0);
 
+  WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
+
+  pka.onDisconnect(wifiDisconnect);
+  pka.onReconnect(wifiReconnect);
 
   server.on("/", handleRoot);
   server.begin();
@@ -129,6 +146,7 @@ void setup() {
 
 void loop() {
   server.handleClient();
+  pka.loop();
 
   if (millis() - lastSensorRead > SENSOR_READ_FREQUENCY_MS) {
     lastSensorRead = millis();

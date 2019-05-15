@@ -24,7 +24,6 @@
     D35 -> Sharp Meausre (blue)
 */
 
-
 #include <WiFi.h>
 #include <WebServer.h>
 #include <Wire.h>
@@ -33,7 +32,7 @@
 #include <Adafruit_BME280.h>
 #include "Adafruit_CCS811.h"
 #include "ThingSpeak.h"
-
+#include "settings.h"
 
 #define SHARP_MEASURE 35
 #define SHARP_LED 32
@@ -57,12 +56,6 @@ Adafruit_BME280 bme;
 
 static WebServer server(80);
 static WiFiClient client;
-
-// Configure these
-unsigned long channelNumber = 0;
-const char * writeApiKey = "";
-const char * wifiSSID = "";
-const char * wifiPass = "";
 
 float temp;
 uint16_t co2;
@@ -126,7 +119,7 @@ void setup() {
   float temp = ccs.calculateTemperature();
   ccs.setTempOffset(temp - 25.0);
 
-  WiFi.begin(wifiSSID, wifiPass);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
 
   server.on("/", handleRoot);
   server.begin();

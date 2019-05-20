@@ -22,12 +22,20 @@
     3.3V -> R150 -> Red -> Cap220uF -> GND
     D32 -> Sharp LED (yellow)
     D35 -> Sharp Meausre (blue)
+
+    Reference Links:
+    https://learn.adafruit.com/adafruit-ccs811-air-quality-sensor/arduino-wiring-test
+    http://arduinodev.woofex.net/2012/12/01/standalone-sharp-dust-sensor/
+    http://www.howmuchsnow.com/arduino/airquality/
+    https://www.sparkfun.com/products/9689
+    
 */
 
 #include <WiFi.h>
 #include <WebServer.h>
 #include <PingKeepAlive.h>
 #include <RhaNtp.h>
+#include <RemoteDebug.h>
 
 #include <Wire.h>
 #include <SPI.h>
@@ -61,6 +69,7 @@ static WebServer server(80);
 static WiFiClient client;
 PingKeepAlive pka;
 RhaNtp ntp;
+RemoteDebug Debug;
 
 time_t bootTime = 0; // boot time
 
@@ -119,54 +128,106 @@ void wifiReconnect()
   
 }
 
+String formatNumber(int x)
+{
+  if (x < 10)
+    return String("0") + String(x);
+  else
+    return String(x);
+}
+
+String formatTime(time_t t)
+{
+  return String(year(t)) 
+    + "-" + String(formatNumber(month(t))) 
+    + "-" + String(formatNumber(day(t)))
+    + " " + String(formatNumber(hour(t))) 
+    + ":" + String(formatNumber(minute(t))) 
+    + ":" + String(formatNumber(second(t)));
+}
+
 void setup() {
   Serial.begin(115200);
-  
   Serial.println("Makerspace Environmental Sensor");
 
-  if (!bme.begin()) {
-    Serial.println("Could not find a valid BME280 sensor, check wiring!");
-    while (1);
-  }
-  
-  if(!ccs.begin()){
-    Serial.println("Failed to start sensor! Please check your wiring.");
-    while(1);
-  }
-
-  pinMode(SHARP_LED, OUTPUT);
-  pinMode(SHARP_MEASURE, INPUT);
-
-  //calibrate temperature sensor
-  while(!ccs.available());
-  float temp = ccs.calculateTemperature();
-  ccs.setTempOffset(temp - 25.0);
-
+  // Connect to wifi
+  Serial.print("Connecting to WIFI: ");
+  Serial.println(WIFI_STA);
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("");
+  Serial.printf("Connected to %s, IP %s\n", WiFi.SSID().c_str(), WiFi.localIP().toString().c_str());
 
+  // Setup telnet debug library
+  Debug.begin("envirosense");
+  Debug.setResetCmdEnabled(true);
+  Debug.setSerialEnabled(true);
+  //String rdbCmds = "dump\r\n";
+  //rdbCmds.concat("set_offset <n>\r\n");
+  //rdbCmds.concat("set_timeserver <n>\r\n");
+  //Debug.setHelpProjectsCmds(rdbCmds);
+  //Debug.setCallBackProjectCmds(&processRemoteDebugCmd);
+
+  // Set action callbacks for wifi connect and disconnect events
   pka.onDisconnect(wifiDisconnect);
   pka.onReconnect(wifiReconnect);
 
+  // Setup time library to get time via ntp
+  DEBUG("Initialise time library\n");
   IPAddress timeServerIP;
   WiFi.hostByName(TIMESERVER, timeServerIP);
   ntp.init(timeServerIP, TIMEZONE);
   setSyncProvider(requestTime);
   setSyncInterval(60 * 60); // every hour
 
+  // Setup webserver callbacks
+  DEBUG("Setting up webserver\n");
   server.on("/", handleRoot);
   server.begin();
 
+  // Init Thingspeak library for pushing out reading data
+  DEBUG("Init Thingspeak");
   ThingSpeak.begin(client);
+
+  // Start up sensors
+  DEBUG("Init BME sensor\n");
+  if (!bme.begin())
+    DEBUG_E("Could not find a valid BME280 sensor, check wiring!\n");
+
+  DEBUG("Init CCS sesnor\n");
+  if(!ccs.begin())
+    DEBUG_E("Failed to start ccs sensor! Please check your wiring.\n");
+
+  // Calibrate temperature sensor 
+  // TODO: put in main loop / do every sensor read?
+  DEBUG("Set css temperature calibration\n");
+  while(!ccs.available());
+  float temp = ccs.calculateTemperature();
+  ccs.setTempOffset(temp - 25.0);
+
+  DEBUG("Init Sharp Dust sensor\n");
+  pinMode(SHARP_LED, OUTPUT);
+  pinMode(SHARP_MEASURE, INPUT);
 }
 
 void loop() {
+  // Housekeeping
+  Debug.handle();
   server.handleClient();
   pka.loop();
   ntp.loop();
-  if (bootTime == 0 && timeStatus() == timeSet)
+  if (bootTime == 0 && timeStatus() == timeSet) {
     bootTime = ntp.localNow();
+    DEBUG("Utc time is: %s\n", formatTime(now()).c_str());
+    DEBUG("Local time is: %s\n", formatTime(ntp.localNow()).c_str());
+  }
 
+  // Read sensors
+  // TODO: move these to RTOS tasks
   if (millis() - lastSensorRead > SENSOR_READ_FREQUENCY_MS) {
     lastSensorRead = millis();
     if(ccs.available()){
@@ -176,7 +237,7 @@ void loop() {
         tvoc = ccs.getTVOC();
       }
       else{
-        Serial.println("error reading ccs sensor");
+        DEBUG_E("error reading ccs sensor\n");
       }
     }
 
@@ -199,37 +260,18 @@ void loop() {
 
   if (millis() - lastDebug > DEBUG_FREQUENCY_MS) {
     lastDebug = millis();
-    Serial.print("CO2: ");
-    Serial.print(co2);
-    Serial.print("ppm, TVOC: ");
-    Serial.print(tvoc);
-    Serial.print("ppb   Temp:");
-    Serial.println(temp);
-
-    Serial.print("BME:    Temp: ");
-    Serial.print(bmeTemp);
-    Serial.print("*C,     Pres: ");
-    Serial.print(bmePressure);
-    Serial.print("hPa,   Humi: ");
-    Serial.print(bmeHumidity);
-    Serial.println("%");
-  
-    Serial.print("SHARP:    Raw Val: ");
-    Serial.print(voMeasured);
-    Serial.print(",   Voltage: ");
-    Serial.print(calcVoltage);
-    Serial.print(",   Dust Density: ");
-    Serial.println(dustDensity);
-
-    Serial.println();
+    DEBUG_D("CSS:   CO2: %dppm,  TVOC %dppb,  Temp:%s\n", co2, tvoc, String(temp).c_str());
+    DEBUG_D("BME:   Temp: %s*C,  Pres: %shpa,  Humi: %s%%\n", String(bmeTemp).c_str(), String(bmePressure).c_str(), String(bmeHumidity).c_str());
+    DEBUG_D("SHARP: Raw: %s,  Volt: %sV,  Dust Density: %s\n", String(voMeasured).c_str(), String(calcVoltage).c_str(), String(dustDensity).c_str());
   }
 
   if (millis() - lastThingSpeakWrite > THINGSPEAK_WRITE_FREQUENCY_MS) {
     lastThingSpeakWrite = millis();
     bool ret = sendData();
-    if (ret)
-      Serial.println("ThingSpeak write ok");
-    else
-      Serial.println("ThingSpeak write failed");
+    if (ret) {
+      DEBUG("ThingSpeak write ok\n");
+    } else {
+      DEBUG_E("ThingSpeak write failed\n");
+    }
   }
 }

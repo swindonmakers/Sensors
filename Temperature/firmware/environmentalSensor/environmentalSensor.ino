@@ -32,6 +32,7 @@
 */
 
 #include <WiFi.h>
+#include <ESPmDNS.h>
 #include <WebServer.h>
 #include <PingKeepAlive.h>
 #include <RhaNtp.h>
@@ -87,6 +88,7 @@ float dustDensity;
 
 time_t requestTime()
 {
+  DEBUG("Running NTP Update\n");
   ntp.updateTime();
   return 0;
 }
@@ -102,6 +104,7 @@ void handleRoot()
 
 bool sendData()
 {
+  DEBUG("Sending data to Thingspeak\n");
   ThingSpeak.setField(1, co2); // CO2
   ThingSpeak.setField(2, tvoc); // TOVC
   ThingSpeak.setField(3, bmeTemp); // Temperature
@@ -146,6 +149,36 @@ String formatTime(time_t t)
     + ":" + String(formatNumber(second(t)));
 }
 
+void taskNetworking(void * parameter)
+{
+  while(1) {
+    Debug.handle();
+    yield();
+    server.handleClient();
+    yield();
+    pka.loop();
+    yield();
+    ntp.loop();
+    yield();
+    if (bootTime == 0 && timeStatus() == timeSet) {
+      bootTime = ntp.localNow();
+      DEBUG("Utc time is: %s\n", formatTime(now()).c_str());
+      DEBUG("Local time is: %s\n", formatTime(ntp.localNow()).c_str());
+    }
+    yield();
+    if (millis() - lastThingSpeakWrite > THINGSPEAK_WRITE_FREQUENCY_MS) {
+      lastThingSpeakWrite = millis();
+      bool ret = sendData();
+      if (ret) {
+        DEBUG("ThingSpeak write ok\n");
+      } else {
+        DEBUG_E("ThingSpeak write failed\n");
+      }
+    }
+    yield();
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   Serial.println("Makerspace Environmental Sensor");
@@ -172,6 +205,15 @@ void setup() {
   //Debug.setHelpProjectsCmds(rdbCmds);
   //Debug.setCallBackProjectCmds(&processRemoteDebugCmd);
 
+  // Setup MDNS to response to envirosense.local address
+  DEBUG("Setup MDNS\n");
+  if (!MDNS.begin("envirosense")) {
+    DEBUG_E("MDNS setup failed\n");
+  } else {
+    MDNS.addService("http", "tcp", 80);
+    MDNS.addService("telnet", "tcp", 23);
+  }
+
   // Set action callbacks for wifi connect and disconnect events
   pka.onDisconnect(wifiDisconnect);
   pka.onReconnect(wifiReconnect);
@@ -190,7 +232,7 @@ void setup() {
   server.begin();
 
   // Init Thingspeak library for pushing out reading data
-  DEBUG("Init Thingspeak");
+  DEBUG("Init Thingspeak\n");
   ThingSpeak.begin(client);
 
   // Start up sensors
@@ -212,20 +254,20 @@ void setup() {
   DEBUG("Init Sharp Dust sensor\n");
   pinMode(SHARP_LED, OUTPUT);
   pinMode(SHARP_MEASURE, INPUT);
+
+  DEBUG("Create RTOS tasks\n");
+  xTaskCreatePinnedToCore(
+              taskNetworking,   /* Task function. */
+              "Networking",     /* String with name of task. */
+              10000,            /* Stack size in bytes. */
+              NULL,             /* Parameter passed as input of the task */
+              1,                /* Priority of the task. */
+              NULL,             /* Task handle. */
+              tskNO_AFFINITY);  /* Core to run task on. */
+                    
 }
 
 void loop() {
-  // Housekeeping
-  Debug.handle();
-  server.handleClient();
-  pka.loop();
-  ntp.loop();
-  if (bootTime == 0 && timeStatus() == timeSet) {
-    bootTime = ntp.localNow();
-    DEBUG("Utc time is: %s\n", formatTime(now()).c_str());
-    DEBUG("Local time is: %s\n", formatTime(ntp.localNow()).c_str());
-  }
-
   // Read sensors
   // TODO: move these to RTOS tasks
   if (millis() - lastSensorRead > SENSOR_READ_FREQUENCY_MS) {
@@ -265,13 +307,5 @@ void loop() {
     DEBUG_D("SHARP: Raw: %s,  Volt: %sV,  Dust Density: %s\n", String(voMeasured).c_str(), String(calcVoltage).c_str(), String(dustDensity).c_str());
   }
 
-  if (millis() - lastThingSpeakWrite > THINGSPEAK_WRITE_FREQUENCY_MS) {
-    lastThingSpeakWrite = millis();
-    bool ret = sendData();
-    if (ret) {
-      DEBUG("ThingSpeak write ok\n");
-    } else {
-      DEBUG_E("ThingSpeak write failed\n");
-    }
-  }
+  yield();
 }

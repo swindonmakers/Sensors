@@ -91,7 +91,7 @@
 
 // Debugger support enabled ?
 // Comment this to disable it
-#define DEBUGGER_ENABLED true
+//#define DEBUGGER_ENABLED true
 #ifdef DEBUGGER_ENABLED
 #define DEBUGGER_HANDLE_TIME 850 // Interval to call handle of debugger - equal to implemented in debugger
 // App have debugger elements on screen ?

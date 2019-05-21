@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<title>Environment Sensor</title>
+	<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+    <link type="text/css" rel="stylesheet" href="style.css" />
+    <script>
+        function logErr(txt) {
+            document.getElementById('err').innerText = txt;
+            setTimeout(() => document.getElementById('err').innerText = '', 5000);
+        }
+
+        function setElement(id, val) {
+        }
+
+        function fetchData() {
+            fetch('http://192.168.0.205/data.json')
+                .then((r) => r.json())
+                    .then((t) => {
+                        console.log(t);
+                        document.getElementById('millis').innerText = t.millis;
+                        document.getElementById('co2').innerText = t.co2;
+                        document.getElementById('tvoc').innerText = t.tvoc;
+                        document.getElementById('temperature').innerText = t.bmeTemp;
+                        document.getElementById('pressure').innerText = t.bmePressure;
+                        document.getElementById('humidity').innerText = t.bmeHumidity;
+                        document.getElementById('dust').innerText = t.dustDensity;
+                        setTimeout(fetchData, 2000);
+                    })
+            .catch((e) => {
+                logErr(e);
+                setTimeout(fetchData, 6000);
+            });
+
+        }
+    </script>
+</head>
+<body onload="fetchData()">
+    <div class="t"><img src="makerspace-logo.png" width="50" height="50" /> Environment Sensor</div>
+    
+    <p>Millis: <span id="millis"></span></p>
+    <p>CO2: <span id="co2"></span>ppm</p>
+    <p>TVOC: <span id="tvoc"></span>ppb</p>
+    <p>Temperature: <span id="temperature"></span>oC</p>
+    <p>Pressure: <span id="pressure"></span>hpa</p>
+    <p>Humidity: <span id="humidity"></span>%</p>
+    <p>Dust Density: <span id="dust"></span>mg/m3</p>
+    
+    <p id="err"></p>
+</body>
+</html>

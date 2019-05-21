@@ -1,4 +1,7 @@
 /*
+  TODO:
+   - find out why telnet debug disconnects after only a short while.
+
   Wiring:
 
     ## BME280
@@ -38,6 +41,8 @@
 #include <PingKeepAlive.h>
 #include <RhaNtp.h>
 #include <RemoteDebug.h>
+#include "FS.h"
+#include "SPIFFS.h"
 
 #include <Wire.h>
 #include <SPI.h>
@@ -94,13 +99,76 @@ time_t requestTime()
   return 0;
 }
 
-void handleRoot() 
+///
+/// format bytes
+///
+String formatBytes(size_t bytes) {
+  if (bytes < 1024) {
+    return String(bytes) + "B";
+  } else if (bytes < (1024 * 1024)) {
+    return String(bytes / 1024.0) + "KB";
+  } else if (bytes < (1024 * 1024 * 1024)) {
+    return String(bytes / 1024.0 / 1024.0) + "MB";
+  } else {
+    return String(bytes / 1024.0 / 1024.0 / 1024.0) + "GB";
+  }
+}
+
+///
+/// returns the conent type for a file
+///
+String getContentType(String filename) {
+    if (filename.endsWith(".htm")) {
+        return "text/html";
+    } else if (filename.endsWith(".html")) {
+        return "text/html";
+    } else if (filename.endsWith(".css")) {
+        return "text/css";
+    } else if (filename.endsWith(".png")) {
+        return "image/png";
+    }
+    return "text/plain";
+}
+
+///
+/// deal with serving files out from SPIFFS internal flash filesystem
+///
+bool handleFileRead(String path) {
+  if (path.endsWith("/")) {
+    path += "index.htm";
+  }
+  String contentType = getContentType(path);
+  if (SPIFFS.exists(path)) {
+    File file = SPIFFS.open(path, "r");
+    server.streamFile(file, contentType);
+    file.close();
+    return true;
+  }
+  return false;
+}
+
+///
+/// return a small json result with the latest readings
+///
+void handleDataJson()
 {
-  String page = "Hi";
-  page += "\r\n";
-  page += millis();
-  
-  server.send(200, "text/plain", page);
+  server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+  server.send(200, "applicaiton/json", "{");
+
+  if (xSemaphoreTake(xSemaphore_lastReading, portMAX_DELAY)) {
+    server.sendContent("\"millis\":"); server.sendContent(String(millis()));
+    server.sendContent(",\"co2\":"); server.sendContent(String(lastReading.co2));
+    server.sendContent(",\"tvoc\":"); server.sendContent(String(lastReading.tvoc));
+    server.sendContent(",\"bmeTemp\":"); server.sendContent(String(lastReading.bmeTemp));
+    server.sendContent(",\"bmePressure\":"); server.sendContent(String(lastReading.bmePressure));
+    server.sendContent(",\"bmeHumidity\":"); server.sendContent(String(lastReading.bmeHumidity));
+    server.sendContent(",\"dustDensity\":"); server.sendContent(String(lastReading.dustDensity));
+    //server.sendContent(",\"noise\":"); server.sendContent(String(lastReading.noise));
+
+    xSemaphoreGive(xSemaphore_lastReading);
+  }
+
+  server.sendContent("}");
 }
 
 void wifiDisconnect()
@@ -288,9 +356,25 @@ void setup()
   setSyncProvider(requestTime);
   setSyncInterval(60 * 60); // every hour
 
+  // Start FS and dump out files
+  SPIFFS.begin();
+  File root = SPIFFS.open("/");
+  File f = root.openNextFile();
+  while (f) {
+      String fileName = f.name();
+      size_t fileSize = f.size();
+      Debug.printf("FS File: %s, size: %s\n", fileName.c_str(), formatBytes(fileSize).c_str());
+      f = root.openNextFile();
+  }
+  Debug.printf("\n");
+
   // Setup webserver callbacks
   DEBUG("Setting up webserver\n");
-  server.on("/", handleRoot);
+  server.on("/data.json", handleDataJson);
+  server.onNotFound( []() { 
+    if (!handleFileRead(server.uri()))
+        server.send ( 404, "text/plain", "page not found" ); 
+    });
   httpUpdater.setup(&server);
   server.begin();
 

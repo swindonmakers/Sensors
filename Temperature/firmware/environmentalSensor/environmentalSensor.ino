@@ -204,6 +204,11 @@ void taskReadSensors(void * parameter)
 
 void taskUpdateThingspeak(void * parameter)
 {
+  // Init Thingspeak library for pushing out reading data
+  DEBUG("Init Thingspeak\n");
+  WiFiClient thingSpeakClient;
+  ThingSpeak.begin(thingSpeakClient);
+
   while(1) {
     
     // Run delay first, so that the sensors have time to read
@@ -288,11 +293,6 @@ void setup()
   server.on("/", handleRoot);
   httpUpdater.setup(&server);
   server.begin();
-
-  // Init Thingspeak library for pushing out reading data
-  DEBUG("Init Thingspeak\n");
-  WiFiClient thingSpeakClient;
-  ThingSpeak.begin(thingSpeakClient);
 
   // Start up sensors
   DEBUG("Init BME sensor\n");

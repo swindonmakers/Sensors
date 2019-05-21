@@ -69,7 +69,6 @@ Adafruit_BME280 bme;
 
 static WebServer server(80);
 static ESP32HTTPUpdateServer httpUpdater;
-static WiFiClient client;
 PingKeepAlive pka;
 RhaNtp ntp;
 RemoteDebug Debug;
@@ -236,7 +235,8 @@ void setup() {
 
   // Init Thingspeak library for pushing out reading data
   DEBUG("Init Thingspeak\n");
-  ThingSpeak.begin(client);
+  WiFiClient thingSpeakClient;
+  ThingSpeak.begin(thingSpeakClient);
 
   // Start up sensors
   DEBUG("Init BME sensor\n");

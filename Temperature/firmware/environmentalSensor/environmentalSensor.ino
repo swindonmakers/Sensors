@@ -53,16 +53,8 @@
 #define SHARP_DELTA_TIME_MICROS 40
 #define SHARP_SLEEP_TIME_MICROS 9680
 
-#define SEALEVELPRESSURE_HPA (1013.25)
-
-#define THINGSPEAK_WRITE_FREQUENCY_MS 60 * 1000
-unsigned long lastThingSpeakWrite = 0;
-
 #define SENSOR_READ_FREQUENCY_MS 1000
-unsigned long lastSensorRead = 0;
-
-#define DEBUG_FREQUENCY_MS 1000
-unsigned long lastDebug = 0;
+#define THINGSPEAK_WRITE_FREQUENCY_MS 60 * 1000
 
 Adafruit_CCS811 ccs;
 Adafruit_BME280 bme;
@@ -75,17 +67,25 @@ RemoteDebug Debug;
 
 time_t bootTime = 0; // boot time
 
-float temp;
-uint16_t co2;
-uint16_t tvoc;
+// Struct encapsulates all the values that make up a single reading
+struct SensorReading {
+  float temp;
+  uint16_t co2;
+  uint16_t tvoc;
 
-float bmeTemp;
-float bmePressure;
-float bmeHumidity;
+  float bmeTemp;
+  float bmePressure;
+  float bmeHumidity;
 
-float voMeasured;
-float calcVoltage;
-float dustDensity;
+  float voMeasured;
+  float calcVoltage;
+  float dustDensity;
+};
+
+// The most recent set of sensor readings
+SensorReading lastReading;
+// A mutex lock on lastReading - don't access it without holding the mutex
+SemaphoreHandle_t xSemaphore_lastReading;
 
 time_t requestTime()
 {
@@ -101,25 +101,6 @@ void handleRoot()
   page += millis();
   
   server.send(200, "text/plain", page);
-}
-
-bool sendData()
-{
-  DEBUG("Sending data to Thingspeak\n");
-  ThingSpeak.setField(1, co2); // CO2
-  ThingSpeak.setField(2, tvoc); // TOVC
-  ThingSpeak.setField(3, bmeTemp); // Temperature
-  ThingSpeak.setField(4, bmePressure); // PressureHpa
-  ThingSpeak.setField(5, bmeHumidity); // Humidity
-  ThingSpeak.setField(6, dustDensity); // DustDensity
-  //ThingSpeak.setField(7, ); // NoiseLevel
-
-  int stat = ThingSpeak.writeFields(channelNumber, writeApiKey);
-  if (stat == 200)
-    return true;
-
-  // failed.
-  return false;
 }
 
 void wifiDisconnect()
@@ -167,20 +148,95 @@ void taskNetworking(void * parameter)
       DEBUG("Local time is: %s\n", formatTime(ntp.localNow()).c_str());
     }
     yield();
-    if (millis() - lastThingSpeakWrite > THINGSPEAK_WRITE_FREQUENCY_MS) {
-      lastThingSpeakWrite = millis();
-      bool ret = sendData();
-      if (ret) {
+  }
+}
+
+void taskReadSensors(void * parameter)
+{
+  // Local variables get populated as part of reading the sensors before copying to the global variable
+  SensorReading newData = {0, 0, 0, 0, 0, 0, 0, 0, 0};
+
+  while(1) {
+    // Read sensors
+    if(ccs.available()){
+      newData.temp = ccs.calculateTemperature();
+      if(!ccs.readData()){
+        newData.co2 = ccs.geteCO2();
+        newData.tvoc = ccs.getTVOC();
+      }
+      else{
+        DEBUG_E("error reading ccs sensor\n");
+      }
+    }
+
+    newData.bmeTemp = bme.readTemperature();
+    newData.bmePressure = bme.readPressure() / 100.0F;
+    newData.bmeHumidity = bme.readHumidity();
+
+    digitalWrite(SHARP_LED, LOW); // power on LED
+    delayMicroseconds(SHARP_SAMPLE_TIME_MICROS);
+    newData.voMeasured = analogRead(SHARP_MEASURE);
+    delayMicroseconds(SHARP_DELTA_TIME_MICROS);
+    digitalWrite(SHARP_LED, HIGH); // power off LED
+    delayMicroseconds(SHARP_SLEEP_TIME_MICROS);
+    // 0 - 3.3V mapped to 0 - 1023 integer values
+    newData.calcVoltage = newData.voMeasured * (3.3 / 1024);
+    // linear eqaution taken from http://www.howmuchsnow.com/arduino/airquality/
+    // Chris Nafis (c) 2012
+    newData.dustDensity = 0.17 * newData.calcVoltage - 0.1;
+
+    DEBUG_D("CSS:   CO2: %dppm,  TVOC %dppb,  Temp:%s\n", newData.co2, newData.tvoc, String(newData.temp).c_str());
+    DEBUG_D("BME:   Temp: %s*C,  Pres: %shpa,  Humi: %s%%\n", String(newData.bmeTemp).c_str(), String(newData.bmePressure).c_str(), String(newData.bmeHumidity).c_str());
+    DEBUG_D("SHARP: Raw: %s,  Volt: %sV,  Dust Density: %s\n", String(newData.voMeasured).c_str(), String(newData.calcVoltage).c_str(), String(newData.dustDensity).c_str());
+
+    if (xSemaphoreTake(xSemaphore_lastReading, portMAX_DELAY)) {
+      lastReading = newData;
+      xSemaphoreGive(xSemaphore_lastReading);
+      DEBUG_V("lastReading Updated\n");
+
+    } else {
+      DEBUG_E("Failed to get mutex lock on lastReading\n");
+    }
+
+    vTaskDelay(SENSOR_READ_FREQUENCY_MS / portTICK_PERIOD_MS);
+  }
+}
+
+void taskUpdateThingspeak(void * parameter)
+{
+  while(1) {
+    
+    // Run delay first, so that the sensors have time to read
+    vTaskDelay(THINGSPEAK_WRITE_FREQUENCY_MS / portTICK_PERIOD_MS);
+
+    if (xSemaphoreTake(xSemaphore_lastReading, portMAX_DELAY)) {
+      DEBUG("Sending data to Thingspeak\n");
+
+      ThingSpeak.setField(1, lastReading.co2); // CO2
+      ThingSpeak.setField(2, lastReading.tvoc); // TOVC
+      ThingSpeak.setField(3, lastReading.bmeTemp); // Temperature
+      ThingSpeak.setField(4, lastReading.bmePressure); // PressureHpa
+      ThingSpeak.setField(5, lastReading.bmeHumidity); // Humidity
+      ThingSpeak.setField(6, lastReading.dustDensity); // DustDensity
+      //ThingSpeak.setField(7, ); // NoiseLevel
+
+      xSemaphoreGive(xSemaphore_lastReading);
+
+      int stat = ThingSpeak.writeFields(channelNumber, writeApiKey);
+      if (stat == 200) {
         DEBUG("ThingSpeak write ok\n");
       } else {
         DEBUG_E("ThingSpeak write failed\n");
       }
+
+    } else {
+      DEBUG_E("Failed to get mutex lock on lastReading\n");
     }
-    yield();
   }
 }
 
-void setup() {
+void setup() 
+{
   Serial.begin(115200);
   Serial.println("Makerspace Environmental Sensor");
 
@@ -258,6 +314,10 @@ void setup() {
   pinMode(SHARP_LED, OUTPUT);
   pinMode(SHARP_MEASURE, INPUT);
 
+  // Create mutexes and tasks
+  DEBUG("Create RTOS mutexes\n");
+  xSemaphore_lastReading = xSemaphoreCreateMutex();
+
   DEBUG("Create RTOS tasks\n");
   xTaskCreatePinnedToCore(
               taskNetworking,   /* Task function. */
@@ -267,48 +327,29 @@ void setup() {
               1,                /* Priority of the task. */
               NULL,             /* Task handle. */
               tskNO_AFFINITY);  /* Core to run task on. */
-                    
+
+  xTaskCreatePinnedToCore(
+              taskReadSensors,   /* Task function. */
+              "ReadSensors",     /* String with name of task. */
+              10000,            /* Stack size in bytes. */
+              NULL,             /* Parameter passed as input of the task */
+              1,                /* Priority of the task. */
+              NULL,             /* Task handle. */
+              tskNO_AFFINITY);  /* Core to run task on. */
+
+  xTaskCreatePinnedToCore(
+              taskUpdateThingspeak,   /* Task function. */
+              "UpdateThingspeak",     /* String with name of task. */
+              10000,            /* Stack size in bytes. */
+              NULL,             /* Parameter passed as input of the task */
+              1,                /* Priority of the task. */
+              NULL,             /* Task handle. */
+              tskNO_AFFINITY);  /* Core to run task on. */
+  
 }
 
-void loop() {
-  // Read sensors
-  // TODO: move these to RTOS tasks
-  if (millis() - lastSensorRead > SENSOR_READ_FREQUENCY_MS) {
-    lastSensorRead = millis();
-    if(ccs.available()){
-      temp = ccs.calculateTemperature();
-      if(!ccs.readData()){
-        co2 = ccs.geteCO2();
-        tvoc = ccs.getTVOC();
-      }
-      else{
-        DEBUG_E("error reading ccs sensor\n");
-      }
-    }
-
-    bmeTemp = bme.readTemperature();
-    bmePressure = bme.readPressure() / 100.0F;
-    bmeHumidity = bme.readHumidity();
-
-    digitalWrite(SHARP_LED, LOW); // power on LED
-    delayMicroseconds(SHARP_SAMPLE_TIME_MICROS);
-    voMeasured = analogRead(SHARP_MEASURE);
-    delayMicroseconds(SHARP_DELTA_TIME_MICROS);
-    digitalWrite(SHARP_LED, HIGH); // power off LED
-    delayMicroseconds(SHARP_SLEEP_TIME_MICROS);
-    // 0 - 3.3V mapped to 0 - 1023 integer values
-    calcVoltage = voMeasured * (3.3 / 1024);
-    // linear eqaution taken from http://www.howmuchsnow.com/arduino/airquality/
-    // Chris Nafis (c) 2012
-    dustDensity = 0.17 * calcVoltage - 0.1;
-  }
-
-  if (millis() - lastDebug > DEBUG_FREQUENCY_MS) {
-    lastDebug = millis();
-    DEBUG_D("CSS:   CO2: %dppm,  TVOC %dppb,  Temp:%s\n", co2, tvoc, String(temp).c_str());
-    DEBUG_D("BME:   Temp: %s*C,  Pres: %shpa,  Humi: %s%%\n", String(bmeTemp).c_str(), String(bmePressure).c_str(), String(bmeHumidity).c_str());
-    DEBUG_D("SHARP: Raw: %s,  Volt: %sV,  Dust Density: %s\n", String(voMeasured).c_str(), String(calcVoltage).c_str(), String(dustDensity).c_str());
-  }
-
-  yield();
+void loop() 
+{
+  // Nothing to do here, everything runs in tasks
+  delay(1000);
 }

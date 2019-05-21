@@ -34,6 +34,7 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <WebServer.h>
+#include <ESP32HTTPUpdateServer.h>
 #include <PingKeepAlive.h>
 #include <RhaNtp.h>
 #include <RemoteDebug.h>
@@ -67,6 +68,7 @@ Adafruit_CCS811 ccs;
 Adafruit_BME280 bme;
 
 static WebServer server(80);
+static ESP32HTTPUpdateServer httpUpdater;
 static WiFiClient client;
 PingKeepAlive pka;
 RhaNtp ntp;
@@ -229,6 +231,7 @@ void setup() {
   // Setup webserver callbacks
   DEBUG("Setting up webserver\n");
   server.on("/", handleRoot);
+  httpUpdater.setup(&server);
   server.begin();
 
   // Init Thingspeak library for pushing out reading data

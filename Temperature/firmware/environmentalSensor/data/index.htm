@@ -14,7 +14,7 @@
         }
 
         function fetchData() {
-            fetch('http://192.168.0.205/data.json')
+            fetch('/data.json')
                 .then((r) => r.json())
                     .then((t) => {
                         console.log(t);

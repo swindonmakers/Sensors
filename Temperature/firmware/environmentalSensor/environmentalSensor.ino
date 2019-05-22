@@ -1,8 +1,43 @@
 /*
-  TODO:
+  ***
+  ** TODO / Ideas for expansion:
+  ***
    - find out why telnet debug disconnects after only a short while.
+   - convert Sharp code into a library
+   - check Sharp calculations (something about auto tuning the min value)
+   - investigate if some setup code could be moved into the FreeRTOS tasks - eg sensor init
+   - sometimes the CCS sensor doesn't init after flashing and just errors
+   - consider keeping an average of readings to send to Thingspeak rather than just point in time
+   - add some pretty charts and gauges to the website:
+      - page with some gauges showing the current readings
+      - page with some charts that build up history while the page is open (using d3js?)  Could also fetch immediate history from Thingspeak on page load?
+   - add some physical level indicators, LED's, physical needle gauge, whatever
+   - add noise level sensor
 
-  Wiring:
+  ***
+  ** Building / Flashing:
+  ***
+    Using Arudino IDE 1.8.9 and ESP32 plugin version 1.0.2 (no reason why later / other versions shouldn't work as well)
+
+    Update settings.h to include wifi details and Thingspeak API key (don't commit these to github!)
+
+    Flash as ESP32 Dev Module (default settings)
+     - 4MB (32Mb)
+     - 240Mhz (Wifi/BT)
+     - 80Mhz flash, QIO
+     - Default 4MB with spiffs (1.2MB APP / 1.5MB SPIFFS)
+     - PSRAM: disabled
+    
+    Flash sketch as usual using Ardinuo IDE, use the ESP32 sketch data upload tool to uploade 
+    the files in the data folder to the SPIFFS for the webserver to serve out.  (remember to 
+    close the Arduino serial monitor window when uploading the SPIFFS or it errors)
+
+    Otherwise connect to envirosense.local/admin and use OTA updates
+
+  ***
+  ** Wiring:
+  ***
+    ESP32 Dev Module
 
     ## BME280
     GND -> GND
@@ -52,23 +87,27 @@
 #include "ThingSpeak.h"
 #include "settings.h"
 
+// Timing paramters for reading the Sharp dust sensor.
 #define SHARP_MEASURE 35
 #define SHARP_LED 32
 #define SHARP_SAMPLE_TIME_MICROS 280
 #define SHARP_DELTA_TIME_MICROS 40
 #define SHARP_SLEEP_TIME_MICROS 9680
 
+// Frequencies for reading sensors and logging values
 #define SENSOR_READ_FREQUENCY_MS 1000
 #define THINGSPEAK_WRITE_FREQUENCY_MS 60 * 1000
 
-Adafruit_CCS811 ccs;
-Adafruit_BME280 bme;
-
+// Create networking and housekeeping related things
 static WebServer server(80);
 static ESP32HTTPUpdateServer httpUpdater;
 PingKeepAlive pka;
 RhaNtp ntp;
 RemoteDebug Debug;
+
+// Create sensor objects
+Adafruit_CCS811 ccs;
+Adafruit_BME280 bme;
 
 time_t bootTime = 0; // boot time
 
@@ -92,6 +131,9 @@ SensorReading lastReading;
 // A mutex lock on lastReading - don't access it without holding the mutex
 SemaphoreHandle_t xSemaphore_lastReading;
 
+///
+/// called by the time library when the time needs to be sync'd
+///
 time_t requestTime()
 {
   DEBUG("Running NTP Update\n");
@@ -171,16 +213,25 @@ void handleDataJson()
   server.sendContent("}");
 }
 
+///
+/// actions to take when wifi disconnects
+///
 void wifiDisconnect()
 {
-  
+
 }
 
+///
+/// actions to take when wifi reconnects
+///
 void wifiReconnect()
 {
   
 }
 
+///
+/// returns x as a two digit number.  eg 5 -> 05, 10 -> 10
+///
 String formatNumber(int x)
 {
   if (x < 10)
@@ -189,6 +240,9 @@ String formatNumber(int x)
     return String(x);
 }
 
+///
+/// returns a string representation of the given time_t
+///
 String formatTime(time_t t)
 {
   return String(year(t)) 
@@ -199,33 +253,44 @@ String formatTime(time_t t)
     + ":" + String(formatNumber(second(t)));
 }
 
+///
+/// FreeRTOS task that takes care of the main networking and housekeeping things
+///
 void taskNetworking(void * parameter)
 {
   while(1) {
     Debug.handle();
     yield();
+
     server.handleClient();
     yield();
+
     pka.loop();
     yield();
+
     ntp.loop();
     yield();
+
     if (bootTime == 0 && timeStatus() == timeSet) {
       bootTime = ntp.localNow();
       DEBUG("Utc time is: %s\n", formatTime(now()).c_str());
       DEBUG("Local time is: %s\n", formatTime(ntp.localNow()).c_str());
     }
+
     yield();
   }
 }
 
+///
+/// FreeRTOS task that regularly reads the sensors and updates the latest reading 
+///
 void taskReadSensors(void * parameter)
 {
   // Local variables get populated as part of reading the sensors before copying to the global variable
   SensorReading newData = {0, 0, 0, 0, 0, 0, 0, 0, 0};
 
   while(1) {
-    // Read sensors
+    // Read ccs sensor to get co2 and tvoc data
     if(ccs.available()){
       newData.temp = ccs.calculateTemperature();
       if(!ccs.readData()){
@@ -237,10 +302,12 @@ void taskReadSensors(void * parameter)
       }
     }
 
+    // Read bme280 to get temperate, humidity and pressure
     newData.bmeTemp = bme.readTemperature();
     newData.bmePressure = bme.readPressure() / 100.0F;
     newData.bmeHumidity = bme.readHumidity();
 
+    // Read sharp dust sensor
     digitalWrite(SHARP_LED, LOW); // power on LED
     delayMicroseconds(SHARP_SAMPLE_TIME_MICROS);
     newData.voMeasured = analogRead(SHARP_MEASURE);
@@ -253,10 +320,12 @@ void taskReadSensors(void * parameter)
     // Chris Nafis (c) 2012
     newData.dustDensity = 0.17 * newData.calcVoltage - 0.1;
 
+    // Log out latest readings to serial and telnet
     DEBUG_D("CSS:   CO2: %dppm,  TVOC %dppb,  Temp:%s\n", newData.co2, newData.tvoc, String(newData.temp).c_str());
     DEBUG_D("BME:   Temp: %s*C,  Pres: %shpa,  Humi: %s%%\n", String(newData.bmeTemp).c_str(), String(newData.bmePressure).c_str(), String(newData.bmeHumidity).c_str());
     DEBUG_D("SHARP: Raw: %s,  Volt: %sV,  Dust Density: %s\n", String(newData.voMeasured).c_str(), String(newData.calcVoltage).c_str(), String(newData.dustDensity).c_str());
 
+    // Update global latest reading value
     if (xSemaphoreTake(xSemaphore_lastReading, portMAX_DELAY)) {
       lastReading = newData;
       xSemaphoreGive(xSemaphore_lastReading);
@@ -266,10 +335,14 @@ void taskReadSensors(void * parameter)
       DEBUG_E("Failed to get mutex lock on lastReading\n");
     }
 
+    // Wait a bit before reading again
     vTaskDelay(SENSOR_READ_FREQUENCY_MS / portTICK_PERIOD_MS);
   }
 }
 
+///
+/// FreeRTOS task to regularly send the current readings to Thingspeak
+///
 void taskUpdateThingspeak(void * parameter)
 {
   // Init Thingspeak library for pushing out reading data
@@ -285,6 +358,7 @@ void taskUpdateThingspeak(void * parameter)
     if (xSemaphoreTake(xSemaphore_lastReading, portMAX_DELAY)) {
       DEBUG("Sending data to Thingspeak\n");
 
+      // Copy current values into fields ready for sending
       ThingSpeak.setField(1, lastReading.co2); // CO2
       ThingSpeak.setField(2, lastReading.tvoc); // TOVC
       ThingSpeak.setField(3, lastReading.bmeTemp); // Temperature
@@ -293,8 +367,11 @@ void taskUpdateThingspeak(void * parameter)
       ThingSpeak.setField(6, lastReading.dustDensity); // DustDensity
       //ThingSpeak.setField(7, ); // NoiseLevel
 
+      // Release mutex before doing the network call as it sometimes 
+      // takes a little time and we don't want to block for too long
       xSemaphoreGive(xSemaphore_lastReading);
 
+      // Make the call to send the data
       int stat = ThingSpeak.writeFields(channelNumber, writeApiKey);
       if (stat == 200) {
         DEBUG("ThingSpeak write ok\n");
@@ -308,6 +385,9 @@ void taskUpdateThingspeak(void * parameter)
   }
 }
 
+///
+/// Standard Arduino setup to get everything configured
+///
 void setup() 
 {
   Serial.begin(115200);
@@ -432,6 +512,9 @@ void setup()
   
 }
 
+///
+/// Standard Arduino loop, nothing to do because everything happens in FreeRTOS tasks
+///
 void loop() 
 {
   // Nothing to do here, everything runs in tasks

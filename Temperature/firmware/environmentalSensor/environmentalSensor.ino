@@ -5,7 +5,6 @@
    - find out why telnet debug disconnects after only a short while.
    - convert Sharp code into a library
    - check Sharp calculations (something about auto tuning the min value)
-   - investigate if some setup code could be moved into the FreeRTOS tasks - eg sensor init
    - sometimes the CCS sensor doesn't init after flashing and just errors
    - consider keeping an average of readings to send to Thingspeak rather than just point in time
    - add some pretty charts and gauges to the website:
@@ -13,6 +12,7 @@
       - page with some charts that build up history while the page is open (using d3js?)  Could also fetch immediate history from Thingspeak on page load?
    - add some physical level indicators, LED's, physical needle gauge, whatever
    - add noise level sensor
+   - do something more useful with NTP time
 
   ***
   ** Building / Flashing:
@@ -104,10 +104,6 @@ static ESP32HTTPUpdateServer httpUpdater;
 PingKeepAlive pka;
 RhaNtp ntp;
 RemoteDebug Debug;
-
-// Create sensor objects
-Adafruit_CCS811 ccs;
-Adafruit_BME280 bme;
 
 time_t bootTime = 0; // boot time
 
@@ -286,6 +282,23 @@ void taskNetworking(void * parameter)
 ///
 void taskReadSensors(void * parameter)
 {
+  // Create sensor objects
+  Adafruit_CCS811 ccs;
+  Adafruit_BME280 bme;
+
+  // Start up sensors
+  DEBUG("Init BME sensor\n");
+  if (!bme.begin())
+    DEBUG_E("Could not find a valid BME280 sensor, check wiring!\n");
+
+  DEBUG("Init CCS sesnor\n");
+  if(!ccs.begin())
+    DEBUG_E("Failed to start ccs sensor! Please check your wiring.\n");
+
+  DEBUG("Init Sharp Dust sensor\n");
+  pinMode(SHARP_LED, OUTPUT);
+  pinMode(SHARP_MEASURE, INPUT);
+
   // Local variables get populated as part of reading the sensors before copying to the global variable
   SensorReading newData = {0, 0, 0, 0, 0, 0, 0, 0, 0};
 
@@ -463,19 +476,6 @@ void setup()
     });
   httpUpdater.setup(&server);
   server.begin();
-
-  // Start up sensors
-  DEBUG("Init BME sensor\n");
-  if (!bme.begin())
-    DEBUG_E("Could not find a valid BME280 sensor, check wiring!\n");
-
-  DEBUG("Init CCS sesnor\n");
-  if(!ccs.begin())
-    DEBUG_E("Failed to start ccs sensor! Please check your wiring.\n");
-
-  DEBUG("Init Sharp Dust sensor\n");
-  pinMode(SHARP_LED, OUTPUT);
-  pinMode(SHARP_MEASURE, INPUT);
 
   // Create mutexes and tasks
   DEBUG("Create RTOS mutexes\n");

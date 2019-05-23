@@ -290,8 +290,19 @@ void taskReadSensors(void * parameter)
   SensorReading newData = {0, 0, 0, 0, 0, 0, 0, 0, 0};
 
   while(1) {
+
+    // Read bme280 to get temperate, humidity and pressure
+    newData.bmeTemp = bme.readTemperature();
+    newData.bmePressure = bme.readPressure() / 100.0F;
+    newData.bmeHumidity = bme.readHumidity();
+
     // Read ccs sensor to get co2 and tvoc data
     if(ccs.available()){
+      // Feed temp and Humidity into css calibration 
+      // (note that the necessary +25 temperature offset is applied by the library)
+      ccs.setEnvironmentalData((int)newData.bmeHumidity, newData.bmeTemp);
+
+      // Read the data
       newData.temp = ccs.calculateTemperature();
       if(!ccs.readData()){
         newData.co2 = ccs.geteCO2();
@@ -301,11 +312,6 @@ void taskReadSensors(void * parameter)
         DEBUG_E("error reading ccs sensor\n");
       }
     }
-
-    // Read bme280 to get temperate, humidity and pressure
-    newData.bmeTemp = bme.readTemperature();
-    newData.bmePressure = bme.readPressure() / 100.0F;
-    newData.bmeHumidity = bme.readHumidity();
 
     // Read sharp dust sensor
     digitalWrite(SHARP_LED, LOW); // power on LED
@@ -466,13 +472,6 @@ void setup()
   DEBUG("Init CCS sesnor\n");
   if(!ccs.begin())
     DEBUG_E("Failed to start ccs sensor! Please check your wiring.\n");
-
-  // Calibrate temperature sensor 
-  // TODO: put in main loop / do every sensor read?
-  DEBUG("Set css temperature calibration\n");
-  while(!ccs.available());
-  float temp = ccs.calculateTemperature();
-  ccs.setTempOffset(temp - 25.0);
 
   DEBUG("Init Sharp Dust sensor\n");
   pinMode(SHARP_LED, OUTPUT);

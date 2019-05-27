@@ -302,6 +302,9 @@ void taskReadSensors(void * parameter)
   // Local variables get populated as part of reading the sensors before copying to the global variable
   SensorReading newData = {0, 0, 0, 0, 0, 0, 0, 0, 0};
 
+  // Give sensors time to init before reading
+  vTaskDelay(2000 / portTICK_PERIOD_MS);
+
   while(1) {
 
     // Read bme280 to get temperate, humidity and pressure
@@ -311,9 +314,12 @@ void taskReadSensors(void * parameter)
 
     // Read ccs sensor to get co2 and tvoc data
     if(ccs.available()){
-      // Feed temp and Humidity into css calibration 
-      // (note that the necessary +25 temperature offset is applied by the library)
-      ccs.setEnvironmentalData((int)newData.bmeHumidity, newData.bmeTemp);
+
+      if (!isnan(newData.bmeHumidity) && !isnan(newData.bmeTemp)) {
+        // Feed temp and Humidity into css calibration 
+        // (note that the necessary +25 temperature offset is applied by the library)
+        ccs.setEnvironmentalData((int)newData.bmeHumidity, newData.bmeTemp);
+      }
 
       // Read the data
       newData.temp = ccs.calculateTemperature();
@@ -324,6 +330,9 @@ void taskReadSensors(void * parameter)
       else{
         DEBUG_E("error reading ccs sensor\n");
       }
+    } else {
+      DEBUG_E("CCS sensor not available resetting\n");
+      ccs.SWReset();
     }
 
     // Read sharp dust sensor
@@ -364,6 +373,9 @@ void taskReadSensors(void * parameter)
 ///
 void taskUpdateThingspeak(void * parameter)
 {
+  // Inital delay to let the sensors start
+  vTaskDelay(5000 / portTICK_PERIOD_MS);
+
   // Init Thingspeak library for pushing out reading data
   DEBUG("Init Thingspeak\n");
   WiFiClient thingSpeakClient;

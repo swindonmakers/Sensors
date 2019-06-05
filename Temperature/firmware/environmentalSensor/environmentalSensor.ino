@@ -95,7 +95,7 @@
 #define SHARP_SLEEP_TIME_MICROS 9680
 
 // Frequencies for reading sensors and logging values
-#define SENSOR_READ_FREQUENCY_MS 1000
+#define SENSOR_READ_FREQUENCY_MS 2000
 #define THINGSPEAK_WRITE_FREQUENCY_MS 60 * 1000
 
 // Create networking and housekeeping related things
@@ -282,6 +282,9 @@ void taskNetworking(void * parameter)
 ///
 void taskReadSensors(void * parameter)
 {
+  // Give other stuff time to start before starting sensors
+  vTaskDelay(5000 / portTICK_PERIOD_MS);
+
   // Create sensor objects
   Adafruit_CCS811 ccs;
   Adafruit_BME280 bme;
@@ -291,9 +294,13 @@ void taskReadSensors(void * parameter)
   if (!bme.begin())
     DEBUG_E("Could not find a valid BME280 sensor, check wiring!\n");
 
+  vTaskDelay(100 / portTICK_PERIOD_MS);
+
   DEBUG("Init CCS sesnor\n");
   if(!ccs.begin())
     DEBUG_E("Failed to start ccs sensor! Please check your wiring.\n");
+
+  ccs.setDriveMode(CCS811_DRIVE_MODE_IDLE);
 
   DEBUG("Init Sharp Dust sensor\n");
   pinMode(SHARP_LED, OUTPUT);
@@ -312,6 +319,8 @@ void taskReadSensors(void * parameter)
     newData.bmePressure = bme.readPressure() / 100.0F;
     newData.bmeHumidity = bme.readHumidity();
 
+    vTaskDelay(100 / portTICK_PERIOD_MS);
+
     // Read ccs sensor to get co2 and tvoc data
     if(ccs.available()){
 
@@ -327,12 +336,13 @@ void taskReadSensors(void * parameter)
         newData.co2 = ccs.geteCO2();
         newData.tvoc = ccs.getTVOC();
       }
-      else{
-        DEBUG_E("error reading ccs sensor\n");
+      else {
+        DEBUG_E("error reading ccs sensor, resetting\n");
+        ccs.begin();
       }
     } else {
       DEBUG_E("CCS sensor not available resetting\n");
-      ccs.SWReset();
+      ccs.begin();
     }
 
     // Read sharp dust sensor
@@ -374,7 +384,7 @@ void taskReadSensors(void * parameter)
 void taskUpdateThingspeak(void * parameter)
 {
   // Inital delay to let the sensors start
-  vTaskDelay(5000 / portTICK_PERIOD_MS);
+  vTaskDelay(15000 / portTICK_PERIOD_MS);
 
   // Init Thingspeak library for pushing out reading data
   DEBUG("Init Thingspeak\n");
@@ -424,6 +434,9 @@ void setup()
   Serial.begin(115200);
   Serial.println("Makerspace Environmental Sensor");
 
+  Wire.begin();
+  Wire.setTimeout(100); // default is 50ms
+
   // Connect to wifi
   Serial.print("Connecting to WIFI: ");
   Serial.println(WIFI_STA);
@@ -439,7 +452,7 @@ void setup()
   // Setup telnet debug library
   Debug.begin("envirosense");
   Debug.setResetCmdEnabled(true);
-  Debug.setSerialEnabled(true);
+  //Debug.setSerialEnabled(true);
   //String rdbCmds = "dump\r\n";
   //rdbCmds.concat("set_offset <n>\r\n");
   //rdbCmds.concat("set_timeserver <n>\r\n");

@@ -126,6 +126,8 @@ struct SensorReading {
 SensorReading lastReading;
 // A mutex lock on lastReading - don't access it without holding the mutex
 SemaphoreHandle_t xSemaphore_lastReading;
+// How to to wait for a lock on the semaphore
+#define SEMAPHORE_WAIT_TIME_MS 1000
 
 ///
 /// called by the time library when the time needs to be sync'd
@@ -364,7 +366,7 @@ void taskReadSensors(void * parameter)
     DEBUG_D("SHARP: Raw: %s,  Volt: %sV,  Dust Density: %s\n", String(newData.voMeasured).c_str(), String(newData.calcVoltage).c_str(), String(newData.dustDensity).c_str());
 
     // Update global latest reading value
-    if (xSemaphoreTake(xSemaphore_lastReading, portMAX_DELAY)) {
+    if (xSemaphoreTake(xSemaphore_lastReading, SEMAPHORE_WAIT_TIME_MS / portTICK_PERIOD_MS)) {
       lastReading = newData;
       xSemaphoreGive(xSemaphore_lastReading);
       DEBUG_V("lastReading Updated\n");
@@ -396,7 +398,7 @@ void taskUpdateThingspeak(void * parameter)
     // Run delay first, so that the sensors have time to read
     vTaskDelay(THINGSPEAK_WRITE_FREQUENCY_MS / portTICK_PERIOD_MS);
 
-    if (xSemaphoreTake(xSemaphore_lastReading, portMAX_DELAY)) {
+    if (xSemaphoreTake(xSemaphore_lastReading, SEMAPHORE_WAIT_TIME_MS / portTICK_PERIOD_MS)) {
       DEBUG("Sending data to Thingspeak\n");
 
       // Copy current values into fields ready for sending
@@ -514,7 +516,7 @@ void setup()
               NULL,             /* Parameter passed as input of the task */
               1,                /* Priority of the task. */
               NULL,             /* Task handle. */
-              tskNO_AFFINITY);  /* Core to run task on. */
+              0);  /* Core to run task on. */
 
   xTaskCreatePinnedToCore(
               taskReadSensors,   /* Task function. */
@@ -523,7 +525,7 @@ void setup()
               NULL,             /* Parameter passed as input of the task */
               1,                /* Priority of the task. */
               NULL,             /* Task handle. */
-              tskNO_AFFINITY);  /* Core to run task on. */
+              1);  /* Core to run task on. */
 
   xTaskCreatePinnedToCore(
               taskUpdateThingspeak,   /* Task function. */
@@ -532,7 +534,7 @@ void setup()
               NULL,             /* Parameter passed as input of the task */
               1,                /* Priority of the task. */
               NULL,             /* Task handle. */
-              tskNO_AFFINITY);  /* Core to run task on. */
+              0);  /* Core to run task on. */
   
 }
 
@@ -542,5 +544,4 @@ void setup()
 void loop() 
 {
   // Nothing to do here, everything runs in tasks
-  delay(1000);
 }

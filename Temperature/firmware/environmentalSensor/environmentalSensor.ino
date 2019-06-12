@@ -258,16 +258,16 @@ void taskNetworking(void * parameter)
 {
   while(1) {
     Debug.handle();
-    yield();
+    vTaskDelay(50 / portTICK_PERIOD_MS);
 
     server.handleClient();
-    yield();
+    vTaskDelay(50 / portTICK_PERIOD_MS);
 
     pka.loop();
-    yield();
+    vTaskDelay(50 / portTICK_PERIOD_MS);
 
     ntp.loop();
-    yield();
+    vTaskDelay(50 / portTICK_PERIOD_MS);
 
     if (bootTime == 0 && timeStatus() == timeSet) {
       bootTime = ntp.localNow();
@@ -275,7 +275,7 @@ void taskNetworking(void * parameter)
       DEBUG("Local time is: %s\n", formatTime(ntp.localNow()).c_str());
     }
 
-    yield();
+    vTaskDelay(50 / portTICK_PERIOD_MS);
   }
 }
 
@@ -544,4 +544,6 @@ void setup()
 void loop() 
 {
   // Nothing to do here, everything runs in tasks
+  // Just delay to make sure the watchdog doesn't cause a reset
+  delay(500);
 }

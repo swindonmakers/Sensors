@@ -83,7 +83,7 @@
 #include <SPI.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BME280.h>
-#include "Adafruit_CCS811.h"
+#include "ccs811.h"
 #include "ThingSpeak.h"
 #include "settings.h"
 
@@ -288,7 +288,7 @@ void taskReadSensors(void * parameter)
   vTaskDelay(5000 / portTICK_PERIOD_MS);
 
   // Create sensor objects
-  Adafruit_CCS811 ccs;
+  CCS811 ccs811;
   Adafruit_BME280 bme;
 
   // Start up sensors
@@ -299,10 +299,16 @@ void taskReadSensors(void * parameter)
   vTaskDelay(100 / portTICK_PERIOD_MS);
 
   DEBUG("Init CCS sesnor\n");
-  if(!ccs.begin())
+  ccs811.set_i2cdelay(50); // Needed for ESP8266 because it doesn't handle I2C clock stretch correctly
+  if (!ccs811.begin())
     DEBUG_E("Failed to start ccs sensor! Please check your wiring.\n");
 
-  ccs.setDriveMode(CCS811_DRIVE_MODE_IDLE);
+  DEBUG("ccs: hardware    version: %08X\n", ccs811.hardware_version());
+  DEBUG("ccs: bootloader  version: %08X\n", ccs811.bootloader_version());
+  DEBUG("ccs: application version: %08X\n", ccs811.application_version());
+
+  if (!ccs811.start(CCS811_MODE_1SEC))
+    DEBUG_E("CCS811 start failed.\n");
 
   DEBUG("Init Sharp Dust sensor\n");
   pinMode(SHARP_LED, OUTPUT);
@@ -324,27 +330,33 @@ void taskReadSensors(void * parameter)
     vTaskDelay(100 / portTICK_PERIOD_MS);
 
     // Read ccs sensor to get co2 and tvoc data
-    if(ccs.available()){
+    if (!isnan(newData.bmeHumidity) && !isnan(newData.bmeTemp)) {
+      // Feed temp and Humidity into css calibration 
+      // From the datasheet:
+      // Humidity is stored in a 16 bit uint in 1/512%RH - eg 48.5% => 0x61, 0x00
+      // Temperature is offset by 25oC with 0 being -25oC and then in 1/512degrees
+      //   so 23.5% => 0x61, 0x00
+      uint16_t h = newData.bmeHumidity * 512;
+      uint16_t t = (newData.bmeTemp + 25) * 512;
+      DEBUG_D("Set CSS env data to h=%d, t=%d\n", h, t);
+      if (!ccs811.set_envdata(t, h))
+        DEBUG_E("Failed to set CCS env data\n");
+    }
 
-      if (!isnan(newData.bmeHumidity) && !isnan(newData.bmeTemp)) {
-        // Feed temp and Humidity into css calibration 
-        // (note that the necessary +25 temperature offset is applied by the library)
-        ccs.setEnvironmentalData((int)newData.bmeHumidity, newData.bmeTemp);
-      }
+    // Read the data
+    uint16_t eco2, etvoc, errstat, raw;
+    ccs811.read(&eco2, &etvoc, &errstat, &raw);
+    if (errstat == CCS811_ERRSTAT_OK) {
+      newData.co2 = eco2;
+      newData.tvoc = etvoc;
 
-      // Read the data
-      newData.temp = ccs.calculateTemperature();
-      if(!ccs.readData()){
-        newData.co2 = ccs.geteCO2();
-        newData.tvoc = ccs.getTVOC();
-      }
-      else {
-        DEBUG_E("error reading ccs sensor, resetting\n");
-        ccs.begin();
-      }
+    } else if (errstat==CCS811_ERRSTAT_OK_NODATA) {
+      DEBUG("CCS: waiting for (new) data\n");
+
+    } else if (errstat & CCS811_ERRSTAT_I2CFAIL) { 
+      DEBUG_E("CCS: I2C error\n");
     } else {
-      DEBUG_E("CCS sensor not available resetting\n");
-      ccs.begin();
+      DEBUG_E("CCS: Error %s\n", ccs811.errstat_str(errstat));
     }
 
     // Read sharp dust sensor
@@ -361,7 +373,7 @@ void taskReadSensors(void * parameter)
     newData.dustDensity = 0.17 * newData.calcVoltage - 0.1;
 
     // Log out latest readings to serial and telnet
-    DEBUG_D("CSS:   CO2: %dppm,  TVOC %dppb,  Temp:%s\n", newData.co2, newData.tvoc, String(newData.temp).c_str());
+    DEBUG_D("CSS:   CO2: %dppm,  TVOC %dppb\n", newData.co2, newData.tvoc);
     DEBUG_D("BME:   Temp: %s*C,  Pres: %shpa,  Humi: %s%%\n", String(newData.bmeTemp).c_str(), String(newData.bmePressure).c_str(), String(newData.bmeHumidity).c_str());
     DEBUG_D("SHARP: Raw: %s,  Volt: %sV,  Dust Density: %s\n", String(newData.voMeasured).c_str(), String(newData.calcVoltage).c_str(), String(newData.dustDensity).c_str());
 
@@ -454,7 +466,7 @@ void setup()
   // Setup telnet debug library
   Debug.begin("envirosense");
   Debug.setResetCmdEnabled(true);
-  //Debug.setSerialEnabled(true);
+  Debug.setSerialEnabled(true);
   //String rdbCmds = "dump\r\n";
   //rdbCmds.concat("set_offset <n>\r\n");
   //rdbCmds.concat("set_timeserver <n>\r\n");

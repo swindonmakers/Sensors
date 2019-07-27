@@ -32,7 +32,7 @@
     the files in the data folder to the SPIFFS for the webserver to serve out.  (remember to 
     close the Arduino serial monitor window when uploading the SPIFFS or it errors)
 
-    Otherwise connect to envirosense.local/admin and use OTA updates
+    Otherwise connect to envirosense.local/update and use OTA updates
 
   ***
   ** Wiring:
@@ -73,7 +73,6 @@
 #include <ESPmDNS.h>
 #include <WebServer.h>
 #include <ESP32HTTPUpdateServer.h>
-#include <PingKeepAlive.h>
 #include <RhaNtp.h>
 #include <RemoteDebug.h>
 #include "FS.h"
@@ -101,7 +100,6 @@
 // Create networking and housekeeping related things
 static WebServer server(80);
 static ESP32HTTPUpdateServer httpUpdater;
-PingKeepAlive pka;
 RhaNtp ntp;
 RemoteDebug Debug;
 
@@ -212,22 +210,6 @@ void handleDataJson()
 }
 
 ///
-/// actions to take when wifi disconnects
-///
-void wifiDisconnect()
-{
-
-}
-
-///
-/// actions to take when wifi reconnects
-///
-void wifiReconnect()
-{
-  
-}
-
-///
 /// returns x as a two digit number.  eg 5 -> 05, 10 -> 10
 ///
 String formatNumber(int x)
@@ -261,9 +243,6 @@ void taskNetworking(void * parameter)
     vTaskDelay(50 / portTICK_PERIOD_MS);
 
     server.handleClient();
-    vTaskDelay(50 / portTICK_PERIOD_MS);
-
-    pka.loop();
     vTaskDelay(50 / portTICK_PERIOD_MS);
 
     ntp.loop();
@@ -315,12 +294,13 @@ void taskReadSensors(void * parameter)
   pinMode(SHARP_MEASURE, INPUT);
 
   // Local variables get populated as part of reading the sensors before copying to the global variable
-  SensorReading newData = {0, 0, 0, 0, 0, 0, 0, 0, 0};
+  SensorReading newData;
 
   // Give sensors time to init before reading
   vTaskDelay(2000 / portTICK_PERIOD_MS);
 
   while(1) {
+    newData = {0, 0, 0, 0, 0, 0, 0, 0, 0};
 
     // Read bme280 to get temperate, humidity and pressure
     newData.bmeTemp = bme.readTemperature();
@@ -373,7 +353,8 @@ void taskReadSensors(void * parameter)
     newData.dustDensity = 0.17 * newData.calcVoltage - 0.1;
 
     // Log out latest readings to serial and telnet
-    DEBUG_D("CSS:   CO2: %dppm,  TVOC %dppb\n", newData.co2, newData.tvoc);
+    DEBUG_D("%s: FreeMem: %d\n", formatTime(ntp.localNow()).c_str(), ESP.getFreeHeap());
+    DEBUG_D("CSS:   CO2: %dppm,  TVOC: %dppb, RAW:%d, ERRSTAT: %d\n", newData.co2, newData.tvoc, raw, errstat);
     DEBUG_D("BME:   Temp: %s*C,  Pres: %shpa,  Humi: %s%%\n", String(newData.bmeTemp).c_str(), String(newData.bmePressure).c_str(), String(newData.bmeHumidity).c_str());
     DEBUG_D("SHARP: Raw: %s,  Volt: %sV,  Dust Density: %s\n", String(newData.voMeasured).c_str(), String(newData.calcVoltage).c_str(), String(newData.dustDensity).c_str());
 
@@ -421,6 +402,7 @@ void taskUpdateThingspeak(void * parameter)
       ThingSpeak.setField(5, lastReading.bmeHumidity); // Humidity
       ThingSpeak.setField(6, lastReading.dustDensity); // DustDensity
       //ThingSpeak.setField(7, ); // NoiseLevel
+      ThingSpeak.setField(8, (int)ESP.getFreeHeap()); // FreeMem
 
       // Release mutex before doing the network call as it sometimes 
       // takes a little time and we don't want to block for too long
@@ -481,10 +463,6 @@ void setup()
     MDNS.addService("http", "tcp", 80);
     MDNS.addService("telnet", "tcp", 23);
   }
-
-  // Set action callbacks for wifi connect and disconnect events
-  pka.onDisconnect(wifiDisconnect);
-  pka.onReconnect(wifiReconnect);
 
   // Setup time library to get time via ntp
   DEBUG("Initialise time library\n");
